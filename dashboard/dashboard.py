@@ -112,7 +112,6 @@ def load_data():
         np.where(rfm_df['RFM_score'] > 1.0, 'Low Value Customers',
                                               'Lost Customers'
         ))))
-    )
 
     rfm_seg = (
         rfm_df.groupby('customer_segment')['customer_unique_id']
