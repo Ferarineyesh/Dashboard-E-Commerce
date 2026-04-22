@@ -387,4 +387,4 @@ with tab3:
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.caption("Dashboard dibuat berdasarkan Proyek Analisis Data: E-Commerce Public Dataset (2016–2018) · Dibuat dengan Streamlit")
+st.caption("Dashboard Proyek Analisis Data: E-Commerce Public Dataset (2016–2018)")
