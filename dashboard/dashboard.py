@@ -7,13 +7,13 @@ from matplotlib.patches import Patch
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── Page Config ──────────────────────────────────────────────────────────────
+# Page Config
 st.set_page_config(
     page_title="E-Commerce Dashboard",
     layout="wide",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# CSS
 st.markdown("""
 <style>
     .main { background-color: #f8f9fa; }
@@ -33,87 +33,110 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helper: generate synthetic data mirroring the notebook ───────────────────
+
+# Load & process data dari main_data.csv
 @st.cache_data
 def load_data():
-    np.random.seed(42)
+    df = pd.read_csv("dashboard/main_data.csv")
 
-    # ── Monthly revenue & orders (2016-09 → 2018-08) ──────────────────────
-    months = pd.period_range("2016-09", "2018-08", freq="M")
-    base = np.linspace(100_000, 950_000, len(months))
-    noise = np.random.normal(0, 40_000, len(months))
-    revenue = np.clip(base + noise, 50_000, None)
-    # spike at Nov-2017
-    nov17_idx = list(months).index(pd.Period("2017-11", "M"))
-    revenue[nov17_idx] = 1_010_271
-    orders_count = (revenue / 140).astype(int) + np.random.randint(-200, 200, len(months))
+    df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'])
 
-    monthly_df = pd.DataFrame({
-        "year_month": months,
-        "total_revenue": revenue,
-        "order_count": orders_count,
-    })
-    monthly_df["year_month_str"] = monthly_df["year_month"].astype(str)
+    # 1. Monthly revenue & orders
+    df_delivered = df[df['order_status'] == 'delivered'].copy()
+    df_delivered['year_month'] = df_delivered['order_purchase_timestamp'].dt.to_period('M')
+    df_delivered['year_month_str'] = df_delivered['year_month'].astype(str)
 
-    # ── Top 15 categories ─────────────────────────────────────────────────
-    categories = [
-        "beleza_saude", "relogios_presentes", "cama_mesa_banho",
-        "esporte_lazer", "informatica_acessorios", "moveis_decoracao",
-        "utilidades_domesticas", "perfumaria", "brinquedos",
-        "cool_stuff", "ferramentas_jardim", "automotivo",
-        "eletronicos", "telefonia", "moveis_escritorio",
-    ]
-    revenues_cat = [
-        1_260_000, 1_190_000, 1_090_000, 960_000, 880_000,
-        720_000, 670_000, 590_000, 540_000, 490_000,
-        430_000, 390_000, 350_000, 320_000, 300_000,
-    ]
-    review_scores = [
-        4.14, 4.10, 3.93, 4.05, 3.90,
-        3.95, 4.08, 4.16, 4.16, 4.02,
-        4.03, 4.01, 4.00, 3.90, 3.49,
-    ]
-    order_counts_cat = [int(r / 142) for r in revenues_cat]
-
-    cat_df = pd.DataFrame({
-        "category": categories,
-        "total_revenue": revenues_cat,
-        "avg_review_score": review_scores,
-        "order_count": order_counts_cat,
-    })
-
-    # ── RFM segments ──────────────────────────────────────────────────────
-    segments = ["Top Customers", "High Value Customer",
-                "Medium Value Customer", "Low Value Customers", "Lost Customers"]
-    counts = [3129, 27224, 31640, 29018, 2347]
-    rfm_seg = pd.DataFrame({"customer_segment": segments, "customer_count": counts})
-    rfm_seg["customer_segment"] = pd.Categorical(
-        rfm_seg["customer_segment"],
-        ["Lost Customers", "Low Value Customers", "Medium Value Customer",
-         "High Value Customer", "Top Customers"]
+    monthly_df = (
+        df_delivered.groupby('year_month_str')
+        .agg(
+            total_revenue=('price', 'sum'),
+            order_count=('order_id', 'nunique')
+        )
+        .reset_index()
+        .sort_values('year_month_str')
     )
 
-    # ── RFM distribution ──────────────────────────────────────────────────
-    n = 93358
-    half = n // 2
-    recency = np.concatenate([np.random.exponential(80, half), np.random.uniform(200, 730, n - half)])
-    frequency = np.ones(n, dtype=int)
-    frequency[:5000] = np.random.randint(2, 16, 5000)
-    n8 = int(n * 0.8)
-    monetary = np.concatenate([np.random.exponential(120, n8), np.random.uniform(500, 14000, n - n8)])
-    rfm_dist = pd.DataFrame({"recency": recency, "frequency": frequency, "monetary": monetary})
+    # 2. Top 15 kategori produk
+    cat_col = 'product_category_name_english' if 'product_category_name_english' in df.columns else 'product_category_name'
 
-    return monthly_df, cat_df, rfm_seg, rfm_dist
+    cat_df = (
+        df_delivered.groupby(cat_col)
+        .agg(
+            total_revenue=('price', 'sum'),
+            order_count=('order_id', 'nunique'),
+            avg_review_score=('review_score', 'mean')
+        )
+        .reset_index()
+        .rename(columns={cat_col: 'category'})
+        .sort_values('total_revenue', ascending=False)
+        .head(15)
+        .round(2)
+    )
+
+    # 3. RFM Analysis
+    reference_date = df_delivered['order_purchase_timestamp'].max() + pd.Timedelta(days=1)
+
+    rfm_df = (
+        df_delivered.groupby('customer_unique_id')
+        .agg(
+            last_purchase=('order_purchase_timestamp', 'max'),
+            frequency=('order_id', 'nunique'),
+            monetary=('payment_value', 'sum')
+        )
+        .reset_index()
+    )
+    rfm_df['recency'] = (reference_date - rfm_df['last_purchase']).dt.days
+    rfm_df.drop('last_purchase', axis=1, inplace=True)
+
+    # RFM Score & Segmentasi
+    rfm_df['r_rank'] = rfm_df['recency'].rank(ascending=False)
+    rfm_df['f_rank'] = rfm_df['frequency'].rank(ascending=True)
+    rfm_df['m_rank'] = rfm_df['monetary'].rank(ascending=True)
+
+    rfm_df['r_rank_norm'] = (rfm_df['r_rank'] / rfm_df['r_rank'].max()) * 100
+    rfm_df['f_rank_norm'] = (rfm_df['f_rank'] / rfm_df['f_rank'].max()) * 100
+    rfm_df['m_rank_norm'] = (rfm_df['m_rank'] / rfm_df['m_rank'].max()) * 100
+    rfm_df.drop(columns=['r_rank', 'f_rank', 'm_rank'], inplace=True)
+
+    rfm_df['RFM_score'] = (
+        0.15 * rfm_df['r_rank_norm'] +
+        0.28 * rfm_df['f_rank_norm'] +
+        0.57 * rfm_df['m_rank_norm']
+    ) * 0.05
+    rfm_df = rfm_df.round(2)
+
+    rfm_df['customer_segment'] = np.where(
+        rfm_df['RFM_score'] > 4.0, 'Top Customers',
+        np.where(rfm_df['RFM_score'] > 3.0, 'High Value Customer',
+        np.where(rfm_df['RFM_score'] > 2.0, 'Medium Value Customer',
+        np.where(rfm_df['RFM_score'] > 1.0, 'Low Value Customers',
+                                              'Lost Customers'
+        ))))
+    )
+
+    rfm_seg = (
+        rfm_df.groupby('customer_segment')['customer_unique_id']
+        .nunique()
+        .reset_index()
+    )
+    rfm_seg.columns = ['customer_segment', 'customer_count']
+    rfm_seg['customer_segment'] = pd.Categorical(
+        rfm_seg['customer_segment'],
+        ['Lost Customers', 'Low Value Customers', 'Medium Value Customer',
+         'High Value Customer', 'Top Customers']
+    )
+
+    return monthly_df, cat_df, rfm_seg, rfm_df
 
 
-monthly_df, cat_df, rfm_seg, rfm_dist = load_data()
+monthly_df, cat_df, rfm_seg, rfm_df = load_data()
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# Header
 st.title("E-Commerce Public Dataset Dashboard")
 st.markdown("Analisis tren penjualan, performa kategori produk, dan segmentasi pelanggan (2016–2018)")
 st.markdown("---")
 
-# ── KPI Cards ─────────────────────────────────────────────────────────────────
+# KPI Cards
 total_rev  = monthly_df["total_revenue"].sum()
 total_ord  = monthly_df["order_count"].sum()
 best_month = monthly_df.loc[monthly_df["total_revenue"].idxmax(), "year_month_str"]
@@ -128,21 +151,18 @@ c4.metric("Total Pelanggan", f"{total_cust:,}")
 
 st.markdown("---")
 
-# ── Tabs ─────────────────────────────────────────────────────────────────────
+# Tabs
 tab1, tab2, tab3 = st.tabs([
     "Tren Penjualan Bulanan",
     "Performa Kategori Produk",
     "Segmentasi Pelanggan (RFM)",
 ])
 
-# ════════════════════════════════════════════════════════════════════════════
 # TAB 1 – Tren Penjualan
-# ════════════════════════════════════════════════════════════════════════════
 with tab1:
     st.subheader("Tren Jumlah Pesanan & Total Pendapatan Bulanan (2016–2018)")
 
-    # ── Sidebar-style filter inside tab
-    years_avail = sorted(set(str(p)[:4] for p in monthly_df["year_month"]))
+    years_avail = sorted(set(s[:4] for s in monthly_df["year_month_str"]))
     sel_years = st.multiselect("Filter Tahun", years_avail, default=years_avail, key="t1_year")
 
     filt = monthly_df[monthly_df["year_month_str"].str[:4].isin(sel_years)]
@@ -161,7 +181,6 @@ with tab1:
     ax.tick_params(axis="x", labelbottom=False)
     ax.grid(axis="y", alpha=0.3)
 
-    # Highlight best
     best_idx = filt["total_revenue"].values.argmax()
     ax.annotate(
         f"Tertinggi\n{filt.iloc[best_idx]['year_month_str']}\n${filt.iloc[best_idx]['total_revenue']/1e6:.2f}M",
@@ -186,7 +205,6 @@ with tab1:
     st.pyplot(fig)
     plt.close()
 
-    # Insight box
     st.info(
         "💡 **Insight:** Puncak pendapatan tertinggi terjadi pada **November 2017** sebesar $1.010.271, "
         "kemungkinan didorong momen belanja akhir tahun. Tahun 2018 secara konsisten mencatatkan "
@@ -204,19 +222,16 @@ with tab1:
     st.dataframe(top10[["Bulan", "Total Revenue ($)", "Jumlah Pesanan"]], use_container_width=True)
 
 
-# ════════════════════════════════════════════════════════════════════════════
 # TAB 2 – Kategori Produk
-# ════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("Performa Top 15 Kategori Produk (2016–2018)")
 
     col_left, col_right = st.columns(2)
 
-    # ── Revenue bar ──────────────────────────────────────────────────────
     with col_left:
         st.markdown("##### Total Revenue per Kategori")
         top15_rev = cat_df.sort_values("total_revenue", ascending=True)
-        colors_rev = ["#D3D3D3"] * 14 + ["#72BCD4"]
+        colors_rev = ["#D3D3D3"] * (len(top15_rev) - 1) + ["#72BCD4"]
 
         fig, ax = plt.subplots(figsize=(7, 6))
         bars = ax.barh(top15_rev["category"], top15_rev["total_revenue"],
@@ -232,7 +247,6 @@ with tab2:
         st.pyplot(fig)
         plt.close()
 
-    # ── Review score bar ─────────────────────────────────────────────────
     with col_right:
         st.markdown("##### Rata-rata Review Score per Kategori")
         top15_review = cat_df.sort_values("avg_review_score", ascending=True)
@@ -262,7 +276,6 @@ with tab2:
         st.pyplot(fig)
         plt.close()
 
-    # ── Scatter: Revenue vs Review ────────────────────────────────────────
     st.markdown("##### Revenue vs Rata-rata Review Score")
     fig, ax = plt.subplots(figsize=(10, 4.5))
     scatter = ax.scatter(
@@ -286,21 +299,18 @@ with tab2:
     plt.close()
 
     st.info(
-        "Insight: beleza_saude adalah kategori paling strategis — revenue tertinggi ($1,3M) "
-        "sekaligus review baik (4,14). moveis_escritorio satu-satunya kategori top 15 di zona merah "
-        "(review 3,49) dan memerlukan perhatian khusus."
+        "💡 **Insight:** Kategori dengan revenue tertinggi sekaligus review baik merupakan kategori "
+        "paling strategis. Perhatikan kategori yang masuk zona merah (review < 3.5) karena "
+        "memerlukan perbaikan kualitas produk atau layanan."
     )
 
 
-# ════════════════════════════════════════════════════════════════════════════
 # TAB 3 – Segmentasi RFM
-# ════════════════════════════════════════════════════════════════════════════
 with tab3:
     st.subheader("Segmentasi Pelanggan Berdasarkan RFM Analysis")
 
     col_a, col_b = st.columns([1.2, 1.8])
 
-    # ── Segment bar ───────────────────────────────────────────────────────
     with col_a:
         st.markdown("##### Jumlah Pelanggan per Segmen")
         seg_sorted = rfm_seg.sort_values("customer_segment", ascending=False)
@@ -320,7 +330,6 @@ with tab3:
         st.pyplot(fig)
         plt.close()
 
-        # Pie
         fig2, ax2 = plt.subplots(figsize=(5, 4))
         colors_pie = ["#2196F3", "#4CAF50", "#FFC107", "#FF7043", "#9E9E9E"]
         wedges, texts, autotexts = ax2.pie(
@@ -338,7 +347,6 @@ with tab3:
         st.pyplot(fig2)
         plt.close()
 
-    # ── Histogram R, F, M ─────────────────────────────────────────────────
     with col_b:
         st.markdown("##### Distribusi Nilai Recency, Frequency & Monetary")
         fig, axes = plt.subplots(3, 1, figsize=(7, 8))
@@ -348,7 +356,7 @@ with tab3:
             ("monetary",  "#FF7043", "Monetary (total nilai belanja $)"),
         ]
         for ax, (col, color, label) in zip(axes, params):
-            sample = rfm_dist[col].sample(min(20000, len(rfm_dist)), random_state=0)
+            sample = rfm_df[col].sample(min(20000, len(rfm_df)), random_state=0)
             ax.hist(sample, bins=40, color=color, edgecolor="white", alpha=0.85)
             ax.axvline(sample.mean(),   color="#333", linestyle="--", linewidth=1.5,
                        label=f"Mean: {sample.mean():.1f}")
@@ -364,7 +372,6 @@ with tab3:
         st.pyplot(fig)
         plt.close()
 
-    # ── Summary table ─────────────────────────────────────────────────────
     st.markdown("##### Ringkasan Segmen")
     pct = rfm_seg.copy()
     pct["Persentase (%)"] = (pct["customer_count"] / pct["customer_count"].sum() * 100).round(1)
@@ -374,9 +381,9 @@ with tab3:
                  use_container_width=True)
 
     st.info(
-        "Insight: Mayoritas pelanggan berada pada segmen Medium Value (31.640) dan "
-        "Low Value (29.018). Hanya 3.129 Top Customers (~3,3%) yang merupakan pelanggan "
-        "paling loyal. Tingkat retensi masih rendah karena sebagian besar pelanggan hanya bertransaksi satu kali."
+        "**Insight:** Mayoritas pelanggan berada pada segmen Medium Value dan Low Value. "
+        "Hanya sekitar 3% yang merupakan Top Customers paling loyal. "
+        "Tingkat retensi masih rendah karena sebagian besar pelanggan hanya bertransaksi satu kali."
     )
 
 # ── Footer ────────────────────────────────────────────────────────────────────
