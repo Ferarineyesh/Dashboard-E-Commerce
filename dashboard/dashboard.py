@@ -205,7 +205,7 @@ with tab1:
     plt.close()
 
     st.info(
-        "💡 **Insight:** Puncak pendapatan tertinggi terjadi pada **November 2017** sebesar $1.010.271, "
+        "**Insight:** Puncak pendapatan tertinggi terjadi pada **November 2017** sebesar $1.010.271, "
         "kemungkinan didorong momen belanja akhir tahun. Tahun 2018 secara konsisten mencatatkan "
         "performa terbaik dengan pendapatan bulanan 0,84M–1,00M."
     )
@@ -298,7 +298,7 @@ with tab2:
     plt.close()
 
     st.info(
-        "💡 **Insight:** Kategori dengan revenue tertinggi sekaligus review baik merupakan kategori "
+        "**Insight:** Kategori dengan revenue tertinggi sekaligus review baik merupakan kategori "
         "paling strategis. Perhatikan kategori yang masuk zona merah (review < 3.5) karena "
         "memerlukan perbaikan kualitas produk atau layanan."
     )
